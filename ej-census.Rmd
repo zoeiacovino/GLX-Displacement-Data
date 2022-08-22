@@ -1,0 +1,191 @@
+---
+title: "Somerville-EJ"
+author: "Zoe Iacovino"
+date: '2022-08-03'
+output: html_document
+---
+
+```{r libraries}
+
+library(tidycensus)
+library(tidyverse)
+options(tigris_use_cache = TRUE)
+library(ggplot2)
+library(ggthemes)
+library(sf)
+library(biscale)
+library(cowplot)
+library(leaflet)
+library(htmltools)
+library(foreign)
+library(readr)
+library(sp)
+library(rgdal)
+library(maps)
+library(spatialEco)
+library(interactions)
+library(broom)
+library(nngeo)
+
+lat_lon_CRS <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
+MA_state_plane <- "+proj=lcc +lat_1=41.71666666666667 +lat_2=42.68333333333333 +lat_0=41 +lon_0=-71.5 +x_0=200000 +y_0=750000 +ellps=GRS80 +units=m +no_defs"
+
+
+```
+
+
+# Census Variables and Shapes
+
+```{r Census}
+
+#Census Tract Lines 
+v19 <- load_variables(2019, "acs5", cache = FALSE)%>%
+  separate(label, into = paste0("label", 1:9), sep = "!!", fill = "right", remove = FALSE)
+
+
+acs19_geom <- get_acs(state = "MA", county = "Middlesex", geography = "tract", year =2019,
+                  variable = "B01001_001", geometry = TRUE)%>%
+              subset(select = -c(variable, estimate))
+
+
+acs19_geombg <- get_acs(state = "MA", county = c("Middlesex"), year = 2019,
+                        geography = "block group",variable = "B01001_001", 
+                        geometry = TRUE)%>%
+              subset(select = -c(variable, estimate))
+
+middlesex<-  get_acs(state = "MA", county = "Middlesex", geography = "county",
+                  variable = "B01001_001", geometry = TRUE)%>%
+              subset(select = -c(variable, estimate))%>%
+  st_transform(MA_state_plane)
+
+somerville<-st_read("Wards.shp")%>%
+  st_transform(lat_lon_CRS)%>%
+  st_union()
+
+
+hou_vars<- c( "B25007_012","B25007_013",  "B25007_014","B25007_015","B25007_016","B25007_017","B25007_018", "B25007_019", "B25007_020","B25007_021", "B25021_001","B25021_002", "B25021_003", "B25004_001", "B25004_002","B25004_004", "B25009_011", "B25009_012","B25009_013", "B25009_014", "B25037_001", "B25037_002", "B25037_003","B09020_006","B19013_001")
+
+
+ej_vars<- c("B19013_001", "B03002_003", "B03002_004", "B03002_005", "B03002_006", "B03002_012", "B01003_001", "C16002_004", "C16002_007", "C16002_010", "C16002_013", "C16002_001")
+
+
+rent_burden_vars<- c("B25106_028", "B25106_032", "B25106_036", "B25106_040", "B25106_044")
+
+
+
+
+
+```
+
+```{r}
+massmhi <- get_acs(state = "MA",geography = "state", year = 2019,
+                  variables = "B19013_001")
+
+acs_ej <- get_acs(state = "MA", county= "Middlesex", geography = "block group", 
+                  variables = ej_vars, year = 2019)%>%
+              mutate(variable = case_when(variable == "B19013_001" ~ "MedINC",
+                                          variable == "B03002_003" ~ "White",
+                                          variable == "B03002_004" ~ "Black",
+                                          variable == "B03002_005" ~ "Native",
+                                          variable == "B03002_006" ~ "Asian",
+                                          variable == "B03002_012" ~ "Latinx",
+                                          variable == "B01003_001" ~ "Tot_pop",
+                                          variable == "C16002_004" ~ "LEPspn",
+                                          variable == "C16002_007" ~ "LEPoei",
+                                          variable == "C16002_010" ~ "LEPapi",
+                                          variable == "C16002_013" ~ "LEPoth",
+                                          variable == "C16002_001" ~ "Tot_hh"))%>%
+              subset(select = -moe)%>%
+              pivot_wider(names_from = "variable",
+                          values_from = "estimate")%>%
+              rowwise()%>%
+              mutate(LowEng = sum(c(LEPspn,LEPoei,LEPapi,LEPoth)),
+                     MinPop = sum(c(Black, Native, Asian, Latinx)))%>%
+              mutate(inc_ej = ifelse(MedINC<.65*massmhi$estimate, 1, 0),
+                     lan_ej = ifelse(LowEng>.25*Tot_hh, 1, 0),
+                     min_ej = ifelse(MinPop>.4*Tot_pop, 1, 0),
+                     and_ej = ifelse(MinPop>.25*Tot_pop && MedINC<1.5*massmhi$estimate, 1, 0),
+                     is_ej = ifelse(sum(inc_ej, lan_ej, min_ej, and_ej)>0, "Yes", "No"))
+
+
+
+
+full_data_ej <- inner_join(acs_ej, acs19_geombg, by = "GEOID")
+som_ej <-st_as_sf(full_data_ej,crs= lat_lon_CRS)
+
+st_write(som_ej, "middlesex-ej.shp")
+
+som_ej<- som_ej[somerville,]
+
+st_write(som_ej, "som-ej.shp")
+
+ggplot(som_ej)+
+  geom_sf()
+
+```
+
+```{r}
+
+housing19<- get_acs(state= "MA", county = "Middlesex", geography = "block group", 
+                       year = 2019, variables = hou_vars)%>%
+        mutate(variable = case_when(variable=="B25007_012"~ "totrent",
+                                    variable=="B25007_013"~ "15_24rent",   
+                                    variable=="B25007_014"~ "25_24rent",
+                                    variable=="B25007_015"~ "35_44rent",
+                                    variable=="B25007_016"~ "45_54rent",
+                                    variable=="B25007_017"~ "55_59rent",
+                                    variable=="B25007_018"~ "60_64rent",
+                                    variable=="B25007_019"~ "65_74rent",  
+                                    variable=="B25007_020"~ "75_84rent",
+                                    variable=="B25007_021"~ "85_uprent",  
+                                    variable=="B25021_002"~ "medrms_owner",  
+                                    variable=="B25021_003"~ "medrms_renter",  
+                                    variable=="B25004_001"~ "totvac",  
+                                    variable=="B25004_002"~ "rentvac",
+                                    variable=="B25004_004"~ "salevac",  
+                                    variable=="B25009_011"~ "renthh_1",  
+                                    variable=="B25009_012"~ "renthh_2",
+                                    variable=="B25009_013"~ "renthh_3",  
+                                    variable=="B25009_014"~ "renthh_4",  
+                                    variable=="B25037_001"~ "medstruc_age",  
+                                    variable=="B25037_002"~ "medstruc_own", 
+                                    variable=="B25037_003"~ "medstruc_rent",
+                                    variable=="B09020_006"~ "femhh",
+                                    variable == "B19013_001" ~ "MedINC",))%>%
+       subset(select = -moe)%>%
+        pivot_wider(names_from = "variable",
+                    values_from = "estimate")
+
+
+```
+
+
+
+```{r}
+rent_burden<- get_acs(state= "MA", county = "Middlesex", geography = "tract", 
+                       year = 2019, variables = rent_burden_vars)%>%
+        mutate(variable = case_when(variable =="B25106_028" ~ "<20% AMI",
+                                    variable =="B25106_032" ~ "20-35% AMI",
+                                    variable =="B25106_036" ~ "35-50% AMI",
+                                    variable =="B25106_040" ~ "50-75% AMI",
+                                    variable =="B25106_044" ~ "75%<AMI"))%>%
+       subset(select = -c(moe, NAME))%>%
+        pivot_wider(names_from = "variable",
+                    values_from = "estimate")
+
+full_data_rb <- inner_join(rent_burden, acs19_geom, by = "GEOID")
+som_rentburden <-st_as_sf(full_data_rb,crs= lat_lon_CRS)
+
+som_rentburden<- som_rentburden[somerville,]
+
+
+
+ggplot(som_rentburden)+
+  geom_sf()
+
+st_write(som_rentburden, "som_rentburden.shp")
+
+```
+
+
+

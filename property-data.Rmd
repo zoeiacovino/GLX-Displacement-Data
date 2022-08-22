@@ -1,0 +1,519 @@
+---
+title: "Property Increases"
+author: "Zoe Iacovino"
+date: '2022-07-19'
+output: html_document
+---
+
+```{r libraries, results='hide', message=FALSE, warning=FALSE}
+library(tidycensus)
+library(tidyverse)
+options(tigris_use_cache = TRUE)
+library(ggplot2)
+library(ggthemes)
+library(sf)
+library(biscale)
+library(cowplot)
+library(leaflet)
+library(htmltools)
+library(htmlwidgets)
+library(foreign)
+library(readr)
+library(sp)
+library(spdplyr)
+library(rgdal)
+library(maps)
+library(spatialEco)
+library(interactions)
+library(broom)
+library(nngeo)
+
+
+
+lat_lon_CRS <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
+MA_state_plane <- "+proj=lcc +lat_1=41.71666666666667 +lat_2=42.68333333333333 +lat_0=41 +lon_0=-71.5 +x_0=200000 +y_0=750000 +ellps=GRS80 +units=m +no_defs"
+
+WGS84 <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
+
+```
+
+# Predicting Risk of Displacement from Rising Property Values 
+
+## GLX and Existing Station Walksheds
+
+```{r Walksheds,  message=FALSE}
+
+wkshds10<-st_read("Polygons.shp")%>%
+  filter(ToBreak == 10,
+         Name != "Relocated Lechmere Station : 0 - 10")%>%
+  subset(select = c(Name, geometry))%>%
+  mutate(glx10 = TRUE)%>%
+  st_union()
+
+ggplot(wkshds10) +
+  geom_sf() 
+
+wkshds20<-st_read("Polygons.shp")%>%
+  filter(ToBreak == 20,
+         Name != "Relocated Lechmere Station : 10 - 20")%>%
+  subset(select = c(Name, geometry))%>%
+  mutate(glx20 = TRUE)%>%
+  st_union()
+
+ggplot(wkshds20) +
+  geom_sf() 
+
+rl_ws10<-st_read("Red Line Walkshed.shp")%>%
+   filter(ToBreak == 10)%>%
+  #subset(select = geometry)%>%
+  mutate(exsys10 = TRUE)
+
+
+rl_ws20<-st_read("Red Line Walkshed.shp")%>%
+   filter(ToBreak == 20)%>%
+  #subset(select = geometry)%>%
+  mutate(exsys20 = TRUE)
+
+
+ol_ws10<-st_read("Orange Line Walkshed.shp")%>%
+   filter(ToBreak == 10)%>%
+  #subset(select = geometry)%>%
+  mutate(exsys10 = TRUE)
+
+
+ol_ws20<-st_read("Orange Line Walkshed.shp")%>%
+   filter(ToBreak == 20)%>%
+  #subset(select = geometry)%>%
+  mutate(exsys20 = TRUE)
+
+
+somexsys10 <- rbind(rl_ws10, ol_ws10)%>%
+  st_union()
+somexsys20 <- rbind(rl_ws20, ol_ws20)%>%
+  st_union()
+
+
+```
+
+## Somerville Assessed Property Data
+```{r Parcels, results='hide', message=FALSE}
+
+pardata <- read.dbf("M274Assess_CY21_FY21.dbf")%>%
+  mutate(STYLE = case_when(
+                STYLE == "2-Decker" ~ "Two-Family",
+                STYLE == "Store" ~ "Commercial",
+                STYLE == "Two decker" ~ "Two-Family",
+                STYLE == "Condominium" ~  "Condominium",
+                STYLE == "Outbuildings" ~ "???",
+                STYLE == "Two Family" ~ "Two-Family",
+                STYLE == "Other State" ~ "???",
+                STYLE == "Warehouse" ~ "Commercial",
+                STYLE == "2 Fam Conv" ~ "Two-Family",
+                STYLE == "Other Municip" ~ "???",
+                STYLE == "Vacant Land" ~ "Vacant",
+                STYLE == "3 fam Conv" ~ "Triple Decker",
+                STYLE == "Auto Sales Rpr" ~ "Commercial",
+                STYLE == "Row End" ~ "Apartment",
+                STYLE == "Row Middle" ~ "Apartment",
+                STYLE == "Serv Sta 2-bay" ~ "Commercial",
+                STYLE == "Conventional" ~ "???",
+                STYLE == "Cottage Bungalow" ~ "Single-Family",
+                STYLE == "Condo Office" ~ "Commercial",
+                STYLE == "Low rise" ~ "Apartment",
+                STYLE == "Retail Condo" ~ "Commercial",
+                STYLE == "Three decker" ~ "Triple Decker",
+                STYLE == "3-Decker" ~ "Triple Decker",
+                STYLE == "Office Bldg" ~ "Commercial",
+                STYLE == "3-Decker-Apts" ~  "Apartment",
+                STYLE == "Mansard" ~ "Single-Family",
+                STYLE == "Fam Conv" ~ "Single-Family",
+                STYLE == "Conventional-Apts" ~ "Apartment",
+                STYLE == "Townhouse end" ~ "Condominium",
+                STYLE == "Stores/Apt Com" ~ "Commercial",
+                STYLE == "Apartments" ~ "Apartment",
+                STYLE == "Townhouse middle" ~ "Condominium",
+                STYLE == "Family Duplex-Apts" ~ "Two-Family",
+                STYLE == "Duplex" ~ "Two-Family",
+                STYLE == "Funeral Home" ~ "Commercial",
+                STYLE == "Mid Rise Apartments" ~ "Apartment",
+                STYLE == "Churches" ~ "Other",
+                STYLE == "Library" ~ "Other",
+                STYLE == "Office/Apts" ~ "Mixed Use",
+                STYLE == "Victorian" ~ "Single-Family",
+                STYLE == "Family Duplex" ~ "Two-Family",
+                STYLE == "Light Indust" ~ "Industrial",
+                STYLE == "2-Decker-Apts" ~ "Apartment",
+                STYLE == "Two Family-Apts" ~ "Apartment",
+                STYLE == "Branch Bank" ~ "Other",
+                STYLE == "Child Care" ~ "Commercial",
+                STYLE == "Dry Cln/Laundr" ~ "Commercial",
+                STYLE == "Townhouse" ~ "Condominium",
+                STYLE == "Retail/Offices" ~ "Commercial",
+                STYLE == "Restaurant" ~ "Commercial",
+                STYLE == "Profess. Bldg" ~ "???",
+                STYLE == "Mid rise" ~ "Apartment",
+                STYLE == "Double 3D"~ "Double Triple",
+                STYLE == "Convert Warehs/Loft" ~ "Apartment",
+                STYLE == "School/College" ~ "Other",
+                STYLE == "High End Constr" ~ "???",
+                STYLE == "Mansard-Apts" ~ "Apartment",
+                STYLE == "Schools-Public" ~ "Other",
+                STYLE == "Clubs/Lodges" ~ "Other",
+                STYLE == "Supermarket" ~ "Supermarket",
+                STYLE == "Colleges" ~ "Other",
+                STYLE == "Dormitory" ~ "Dormitory",
+                STYLE == "Service Shop" ~ "Commercial",
+                STYLE == "Cottage" ~ "Single-Family",
+                STYLE == "Row Mid" ~ "Apartment",
+                STYLE == "High Rise Apt" ~ "Apartment",
+                STYLE == "Fire Station" ~ "Other",
+                STYLE == "Finan Inst." ~ "Other",
+                STYLE == "Bakery" ~ "Commercial",
+                STYLE == "Stores/Office" ~ "Commercial",
+                STYLE == "Row Mid-Apts" ~ "Apartment",
+                STYLE == "Row End-Apts" ~ "Apartment",
+                STYLE == "Fast Food Rest" ~ "Commercial",
+                STYLE == "Office/Warehs" ~ "Commercial",
+                STYLE == "Home for Aged" ~ "Senior Living",
+                STYLE == "Converted School" ~ "Other",
+                STYLE == "Theaters Encl." ~ "Commercial",
+                STYLE == "Other Federal" ~ "Other",
+                STYLE == "Department Str" ~ "Commercial",
+                STYLE == "Nightclub/Bar" ~ "Commercial",
+                STYLE == "Hospital" ~ "Other",
+                STYLE == "Hotel" ~ "Commercial",
+                STYLE == "Commercial" ~ "Commercial",
+                STYLE == "Skating Arena" ~ "Other",
+                STYLE == "Serv Sta 3-Bay" ~ "Commercial",
+                STYLE == "Garage/Office" ~ "Commercial",
+                STYLE == "City/Town Hall" ~ "Other",
+                STYLE == "Truck Terminal" ~ "Commercial", 
+                STYLE == "Food Process" ~ "Commercial",
+                STYLE == "Comm Warehouse" ~ "Commercial",
+                STYLE == "Commercial Bld" ~ "Commercial",
+                STYLE == "Health Club/Gym" ~ "Commercial", 
+                STYLE == "Converted Municipal" ~ "Other",
+                STYLE == "Research/Devel" ~ "Other",
+                STYLE == "Car Wash" ~ "Commercial",
+                STYLE == "Hospitals-Priv" ~ "Other",
+                STYLE == "Victorian-Apts" ~ "Apartment",
+                STYLE == "Coin-op CarWsh" ~ "Commercial",
+                STYLE == "Indust Condo" ~ "Industrial",
+                STYLE == "Pre-Eng Warehs" ~ "Industrial",
+                STYLE == "Telephone Bldg" ~ "Other",
+                STYLE == "Heavy Indust" ~ "Industrial",
+                STYLE == "Pkg Garage" ~ "Other",
+                STYLE == "OFFICE LAB" ~ "Commercial",
+                STYLE == "Shop Center RE" ~ "Commercial",
+                STYLE == "Supermarkets" ~ "Supermarket"),
+         USE = case_when(STYLE == "Two-Family" ~ "Residential",
+                         STYLE == "Commercial" ~ "Commercial",
+                         STYLE == "Condominium" ~ "Residential",
+                         STYLE == "???" ~ "Other",
+                         STYLE == "Vacant" ~ "Other",
+                         STYLE == "Triple Decker" ~ "Residential",
+                         STYLE == "Apartment" ~ "Residential",
+                         STYLE == "Single-Family" ~ "Residential",
+                         STYLE == "Other" ~ "Other",
+                         STYLE == "Mixed Use" ~ "Other",
+                         STYLE == "Industrial" ~ "Industrial",
+                         STYLE == "Double Triple" ~ "Residential",
+                         STYLE == "Supermarket"~ "Commercial",
+                         STYLE == "Dormitory" ~ "Residential",
+                         STYLE == "Senior Living" ~ "Residential"),
+         NRPS = NUM_ROOMS/STORIES)
+
+write.csv(pardata, "pardata.csv") 
+
+sompar <- st_read("M274TaxPar_CY21_FY21.shp")%>%
+  subset(select = -c(TOWN_ID, NO_MATCH, MAP_NO, BND_CHK, SOURCE))
+
+
+sompar<- right_join(sompar, pardata, by = "LOC_ID")%>%
+  st_centroid()%>%
+  st_transform(MA_state_plane)%>%
+  filter(!is.na(SHAPE_Leng))
+  
+#ggplot(sompar) +
+ # geom_sf() 
+
+
+```
+
+
+## Combining Data
+```{r,results='hide', message=FALSE}
+
+###
+#nearest GLX station
+###
+glx <- read.csv("GLX_Stations.CSV")%>%
+  subset(select = -description)%>%
+  filter(Name != "Relocated Lechmere Station")
+
+glx<- st_as_sf(glx, coords=(c("X", "Y")), crs= lat_lon_CRS)%>%
+  st_transform(MA_state_plane)
+
+idk<-st_nn(sompar,glx)
+
+ns<- as.numeric(idk)
+
+sompar<-sompar%>%
+  mutate(near_station = glx$Name[ns])
+
+som_ej<-st_read("som-ej.shp")
+
+###
+#10 Min GLX Walksheds
+###
+
+sompar_sp<- as(sompar, "Spatial")
+sompar_sp<- sompar_sp%>%spTransform("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+#proj4string(sompar_sp) <- CRS("+proj=longlat +datum=WGS84")
+
+wkshds10_sp<-as(wkshds10, "Spatial")
+wkshds10_sp<-wkshds10_sp%>%spTransform("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+wkshds10_sp@proj4string
+proj4string(sompar_sp) <- proj4string(wkshds10_sp)
+
+
+wkshdspip <- point.in.poly(sompar_sp,wkshds10_sp)
+
+#head(wkshdspip@data)
+
+sompar_sp<- wkshdspip
+  
+sompar_sp@data<- sompar_sp@data%>%  
+  mutate(in_glx = ifelse(is.na(poly.ids), FALSE, TRUE))%>%
+  subset(select = -poly.ids)
+
+head(sompar_sp@data)
+
+
+
+###
+#20 Min GLX Walkshed Indicator
+###
+wkshds20_sp<-as(wkshds20, "Spatial")
+wkshds20_sp<-wkshds20_sp%>%spTransform("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+wkshds20_sp@proj4string
+proj4string(sompar_sp) <- proj4string(wkshds20_sp)
+
+
+wkshds20pip <- point.in.poly(sompar_sp,wkshds20_sp)
+
+
+
+sompar_sp<- wkshds20pip
+
+sompar_sp@data<- sompar_sp@data%>%  
+ mutate(in_glx20 = ifelse(is.na(poly.ids), FALSE, TRUE))%>%
+  subset(select = -poly.ids)
+
+
+###
+#Existing System Walkshed Indicator 20 min
+###
+
+somexsys20_sp<-as(somexsys20, "Spatial")
+somexsys20_sp<-somexsys20_sp%>%spTransform("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+somexsys20_sp@proj4string
+proj4string(sompar_sp) <- proj4string(somexsys20_sp)
+
+
+somexsys20pip <- point.in.poly(sompar_sp,somexsys20_sp)
+
+sompar_sp<- somexsys20pip
+
+sompar_sp@data<- sompar_sp@data%>%  
+  mutate(somexsys20 = ifelse(is.na(poly.ids), FALSE, TRUE))%>%
+  subset(select = -poly.ids)
+  
+
+colnames(sompar_sp@data)
+
+###
+#Existing System Walkshed Indicator 10 min
+###
+
+somexsys10_sp<-as(somexsys10, "Spatial")
+somexsys10_sp<-somexsys10_sp%>%spTransform("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+somexsys10_sp@proj4string
+proj4string(sompar_sp) <- proj4string(somexsys10_sp)
+
+
+somexsys10pip <- point.in.poly(sompar_sp,somexsys10_sp)
+
+
+
+sompar_sp<- somexsys10pip
+
+sompar_sp@data<- sompar_sp@data%>%  
+  mutate(somexsys10 = ifelse(is.na(poly.ids), FALSE, TRUE))%>%
+  subset(select = -poly.ids)
+
+
+###
+#EJ Indicators
+###
+
+som_ej_sp<-as(som_ej, "Spatial")
+som_ej_sp<-som_ej_sp%>%spTransform("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+som_ej_sp@proj4string
+proj4string(sompar_sp) <- proj4string(som_ej_sp)
+
+
+somejpip <- point.in.poly(sompar_sp,som_ej_sp)
+
+
+
+sompar_sp<- somejpip
+
+
+
+colnames(sompar_sp@data)
+
+
+lm_prop<- sompar_sp@data
+
+lm_prop$STORIES<- as.numeric(lm_prop$STORIES)
+
+summary(lm_prop$YEAR_BUILT)
+
+unique(lm_prop$STYLE)
+
+
+
+    
+
+#write.csv(lm_prop, "property-data.csv")
+
+```
+
+## Regression Analysis
+
+2014 MAPC Model
+
+Assessed Value/Unit = station + walkshed + STYLE + Year Built + Rooms/Unit
+
+
+Some problems with this
+
+FY21 Assessor's Data has a ton of missing data
+Condominium as a [STYLE] are the only entries with values in [UNITS]
+[STORIES] clearly has some errors as one "Two Family" allegedly has 19 stories and no land value
+STYLE required the massive recoding above to be able to filter by residential use and best guess at size of residence
+
+
+I think I will instead use as a model: 
+
+TOTAL_VAL/RES_AREA ~ near_station + in_glx + STYLE + YEAR_BUILT + RES_AREA/NUM_ROOMS
+
+Because residential area is the closest I can get to a measure of available housing, unless I can somehow figure how to count entries of a particular address and use that to calculate unit, ie if 100 Broadway appears 3 times I would be able to assign a value of 3 to the Unit variable for each observation
+
+```{r, results='hide', message=FALSE}
+lm_prop<- read.csv("property-data.csv")
+
+
+lm_prop<-lm_prop%>%
+  filter(USE == "Residential",
+         STYLE != "Dormitory",
+         STYLE != "Senior Living",
+         TOTAL_VAL >0,
+         RES_AREA >0,
+         NUM_ROOMS >0)%>%
+  mutate(APNR = RES_AREA/NUM_ROOMS)
+
+model1<- lm(TOTAL_VAL/RES_AREA ~  in_glx + STYLE + YEAR_BUILT + APNR, 
+            data = lm_prop)
+
+summary(model1)
+
+
+model1a<- lm(TOTAL_VAL/RES_AREA ~  in_glx20 + STYLE + YEAR_BUILT + APNR, 
+            data = lm_prop)
+
+summary(model1a)
+
+
+modelE<- lm(TOTAL_VAL/RES_AREA ~  somexsys10 + STYLE + YEAR_BUILT + APNR, 
+            data = lm_prop)
+
+summary(modelE)
+
+modelE20<- lm(TOTAL_VAL/RES_AREA ~ somexsys20 + STYLE + YEAR_BUILT + APNR, 
+            data = lm_prop)
+
+summary(modelE20)
+
+
+model3<- lm(LAND_VAL ~ in_glx + STYLE + YEAR_BUILT + APNR + (in_glx*STYLE),
+            data = lm_prop)
+
+summary(model3)
+
+modelEJ<- lm(TOTAL_VAL/RES_AREA ~ in_glx + STYLE + YEAR_BUILT + APNR + is_ej +(in_glx*STYLE),
+             data= lm_prop)
+
+summary(modelEJ)
+
+#visualize# 
+
+```
+## Calculating Averages
+Intercept is for Apartments 
+
+```{r, message=FALSE}
+#Run once
+model1<-tidy(model1)
+model1a<-tidy(model1a)
+
+
+modelE<-tidy(modelE)
+modelE20<-tidy(modelE20)
+
+
+# Regression Averages and Premium
+Y<-model1$estimate[1]+ model1$estimate[2]
+Y20<- model1a$estimate[1]+ model1a$estimate[2]
+
+lmPGLX<- Y/Y20
+
+YE <- modelE$estimate[1]+ modelE$estimate[2]
+YE20 <- modelE20$estimate[1]+ modelE20$estimate[2]
+
+lmPE<- YE/YE20
+
+lm_avg_incr<- (lmPE/lmPGLX*Y-Y)*mean(lm_prop$RES_AREA)
+
+
+
+
+# Simple Means
+
+yglx10<-aggregate(lm_prop$TOTAL_VAL, list(lm_prop$in_glx), FUN=mean)
+yglx20<-aggregate(lm_prop$TOTAL_VAL, list(lm_prop$in_glx20), FUN=mean)
+
+yex10<-aggregate(lm_prop$TOTAL_VAL, list(lm_prop$somexsys10), FUN=mean)
+yex20<-aggregate(lm_prop$TOTAL_VAL, list(lm_prop$somexsys20), FUN=mean)
+
+pglx<- yglx10$x[2]/yglx20$x[2]
+
+pex<- yex10$x[2]/yex20$x[2]
+
+avg_inc<- pex/pglx*yglx10$x[2]-yglx10$x[2]
+
+pp<- as.data.frame(lmPGLX)%>%
+  cbind(pglx, lmPE, pex, lm_avg_incr, avg_inc)
+
+#write.csv(pp, "prop-premiums.csv")
+
+
+```
+
